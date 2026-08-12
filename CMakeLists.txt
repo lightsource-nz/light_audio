@@ -29,3 +29,10 @@ if(LIGHT_SYSTEM STREQUAL PICO_SDK AND LIGHT_PLATFORM STREQUAL TARGET)
                 hardware_pwm
         )
 endif()
+
+# tests are host-only: the binary has to run where it is built. BUILD_TESTING is defined by
+# include(CTest) in whatever project pulls this module in, so a consumer that never enabled
+# testing simply does not get them
+if(BUILD_TESTING AND LIGHT_PLATFORM STREQUAL HOST)
+        add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/test light_audio_test)
+endif()
