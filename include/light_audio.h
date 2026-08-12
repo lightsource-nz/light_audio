@@ -73,6 +73,10 @@ struct audio_device {
         // the source needed no conversion and is being played where it lies
         uint8_t *owned_buffer;
         bool playing;
+        // when the current buffer was handed to the driver. only used to report how long
+        // playback actually took, which is the one number that separates "the transfer ran
+        // and it was simply too quiet to hear" from "the transfer never started"
+        uint32_t play_start_ms;
         // tone rather than samples. tracked separately because a tone ends on a clock rather
         // than on the DMA running out
         bool toning;

@@ -93,6 +93,7 @@ struct audio_device *light_audio_init_device_va(
         dev->volume = LIGHT_AUDIO_VOLUME_MAX;
         dev->owned_buffer = NULL;
         dev->playing = false;
+        dev->play_start_ms = 0;
         dev->toning = false;
         dev->tone_end_ms = 0;
 
@@ -214,6 +215,7 @@ bool light_audio_play_pcm(struct audio_device *dev, const void *samples,
                 return false;
         }
         dev->playing = true;
+        dev->play_start_ms = light_platform_get_time_since_init();
         return true;
 }
 
@@ -267,6 +269,11 @@ void light_audio_poll_devices(void)
                         dev->toning = false;
                 }
                 if(dev->playing && !dev->driver_ctx->driver->busy(dev)) {
+                        // the elapsed time is the diagnostic worth having: a buffer that
+                        // played for about as long as its sample count implies really did
+                        // stream, and one that finishes in a few milliseconds never started
+                        light_debug("playback finished after %d ms",
+                                        (int)(now - dev->play_start_ms));
                         dev->driver_ctx->driver->stop(dev);
                         // only now is the conversion buffer safe to release: until busy()
                         // goes false the DMA is still reading out of it
