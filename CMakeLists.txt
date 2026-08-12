@@ -14,21 +14,14 @@ target_sources(
 )
 
 # no light_ioport, on the same terms as light_backlight and light_button: a buzzer is driven
-# as a PWM output on a pin, not over a transport bus, so there is no io_context to open
+# as a PWM output on a pin, not over a transport bus, so there is no io_context to open.
+#
+# and no hardware_* either any more -- PWM and its DMA streaming live behind light_platform
+# now, so this module names no chip peripheral at all and needs no per-platform link block
 target_link_libraries(
         light_audio INTERFACE
         light_core
 )
-
-if(LIGHT_SYSTEM STREQUAL PICO_SDK AND LIGHT_PLATFORM STREQUAL TARGET)
-        target_link_libraries(
-                light_audio INTERFACE
-                hardware_clocks
-                hardware_dma
-                hardware_gpio
-                hardware_pwm
-        )
-endif()
 
 # tests are host-only: the binary has to run where it is built. BUILD_TESTING is defined by
 # include(CTest) in whatever project pulls this module in, so a consumer that never enabled
