@@ -40,6 +40,11 @@ struct audio_driver
 {
         const uint8_t *name;
         struct audio_driver_context *(*spawn_context)();
+        //   frees whatever spawn_context() allocated. Called when the device holding that
+        // context is released, so a context outlives exactly the device it was spawned for.
+        // OPTIONAL: a driver whose context is not heap-allocated leaves this NULL and the
+        // release path skips it
+        void (*destroy_context)(struct audio_driver_context *ctx);
         void (*init_device)(struct audio_device *);
         // hands over a block of 8-bit unsigned duty values to play at `sample_rate`. the
         // buffer must stay valid until busy() goes false -- the driver does not copy it,

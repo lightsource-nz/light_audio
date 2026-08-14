@@ -11,7 +11,13 @@ static void _device_root_child_add(struct light_object *obj, struct light_object
 }
 static void _device_release(struct light_object *obj)
 {
-        light_free(to_audio_device(obj));
+        struct audio_device *dev = to_audio_device(obj);
+        //   the driver context was spawned for this device alone, so it goes with it. Without
+        // this the device is reclaimed and its context -- plus whatever driver state hangs
+        // off it -- is not, a leak that only becomes visible once teardown is exercised
+        if(dev->driver_ctx && dev->driver_ctx->driver->destroy_context)
+                dev->driver_ctx->driver->destroy_context(dev->driver_ctx);
+        light_free(dev);
 }
 static void _device_add(struct light_object *obj, struct light_object *parent) {
         struct audio_device *dev = to_audio_device(obj);

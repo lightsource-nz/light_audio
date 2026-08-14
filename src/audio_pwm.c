@@ -16,6 +16,7 @@ struct audio_pwm_state {
 };
 
 static struct audio_driver_context *_pwm_spawn_context();
+static void _pwm_destroy_context(struct audio_driver_context *ctx);
 static void _pwm_init(struct audio_device *dev);
 static bool _pwm_submit(struct audio_device *dev, const uint8_t *duty, uint32_t count,
                         uint32_t sample_rate);
@@ -26,6 +27,7 @@ static void _pwm_tone(struct audio_device *dev, uint32_t hz);
 static struct audio_driver _driver_pwm = {
         .name = "audio.driver:pwm",
         .spawn_context = _pwm_spawn_context,
+        .destroy_context = _pwm_destroy_context,
         .init_device = _pwm_init,
         .submit = _pwm_submit,
         .busy = _pwm_busy,
@@ -48,6 +50,26 @@ static struct audio_driver_context *_pwm_spawn_context()
         state->pin = 0;
         state->pwm = NULL;
         return ctx;
+}
+
+//   the counterpart to _pwm_spawn_context(), called from the device release path
+// when the device this context was spawned for is freed. Frees in the reverse of
+// the order allocated: the state first, then the context that points at it
+static void _pwm_destroy_context(struct audio_driver_context *ctx)
+{
+        struct audio_pwm_state *state = (struct audio_pwm_state *) ctx->state;
+        //   the PWM block is a hardware resource claimed by light_platform_pwm_open(), not
+        // memory: freeing the state without closing it leaves the block claimed for the rest
+        // of the run, and the next open() of that pin fails.
+        //
+        //   the pin is handed back driven LOW rather than just closed. close() leaves it
+        // wherever the last duty put it, and a piezo across a floating pin is not a silent one
+        if(state->pwm) {
+                light_platform_pwm_release_pin(state->pwm, false);
+                light_platform_pwm_close(state->pwm);
+        }
+        light_free((void *)ctx->state);
+        light_free(ctx);
 }
 
 struct audio_device *light_audio_pwm_create_device(uint8_t *name, uint8_t pin)
