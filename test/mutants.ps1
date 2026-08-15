@@ -35,7 +35,26 @@ $mutants = @(
  @('no input clamp',           'if(sample < -32768) sample = -32768;', 'if(0) sample = -32768;'),
  @('no output clamp',          'if(duty > LIGHT_AUDIO_DUTY_MAX) duty = LIGHT_AUDIO_DUTY_MAX;', 'if(0) duty = LIGHT_AUDIO_DUTY_MAX;'),
  @('volume not clamped',       'if(volume > LIGHT_AUDIO_VOLUME_MAX)', 'if(0)'),
- @('shift by 7 (double gain)', 'centred = sample >> 8;', 'centred = sample >> 7;')
+ @('shift by 7 (double gain)', 'centred = sample >> 8;', 'centred = sample >> 7;'),
+ #   the playback lifecycle, covered by test_audio_playback.c. These break sequencing rather
+ # than arithmetic, so the symptom is not a wrong sound but a use-after-free, a leak, or a
+ # transducer left sounding -- none of which a listening test would reliably catch, and the
+ # last of which was a real bug this suite found
+ #   note the indentation carried in these anchors: .Replace() is global, so a 16-space
+ # `_release_buffer(dev);` picks out the one on the refused-submit path while leaving the
+ # three at other depths alone. Where an anchor genuinely appears twice at the same depth the
+ # mutant is named for what patching BOTH does
+ @('buffer freed while DMA reads it', '                if(dev->playing && !dev->driver_ctx->driver->busy(dev)) {', '                if(dev->playing) {'),
+ @('conversion buffer never freed',  '        if(!dev->owned_buffer)', '        if(1)'),
+ @('refused submit leaks its buffer', '                _release_buffer(dev);', '                ;'),
+ @('zero-copy taken at any volume',  '        return format->encoding == LIGHT_AUDIO_PCM_U8 && volume == LIGHT_AUDIO_VOLUME_MAX;', '        return format->encoding == LIGHT_AUDIO_PCM_U8;'),
+ @('busy device is interrupted',     '        if(dev->driver_ctx->driver->busy(dev))', '        if(0)'),
+ @('stereo accepted',                '        if(format.channels > 1) {', '        if(0) {'),
+ @('unknown encoding accepted',      '        if(format.encoding != LIGHT_AUDIO_PCM_U8 && format.encoding != LIGHT_AUDIO_PCM_S16) {', '        if(0) {'),
+ @('the driver is never stopped',    '        dev->driver_ctx->driver->stop(dev);', '        ;'),
+ @('stop does not silence a tone',   '                dev->driver_ctx->driver->tone(dev, 0);' + "`r`n" + '        _release_buffer(dev);', '        _release_buffer(dev);'),
+ @('indefinite tone expires immediately', '                if(dev->toning && dev->tone_end_ms', '                if(dev->toning && (1 || dev->tone_end_ms)'),
+ @('tone duration never expires',    '                                && (int32_t)(now - dev->tone_end_ms) >= 0) {', '                                && 0) {')
 )
 
 $original = Get-Content $src -Raw
@@ -51,7 +70,7 @@ trap { Restore-Source; break }
 
 try {
         Write-Host "=== baseline (unmutated) ==="
-        & cmake --build $BuildDir --target test_audio_convert 2>&1 | Out-Null
+        & cmake --build $BuildDir --target test_audio_convert test_audio_playback 2>&1 | Out-Null
         & ctest --test-dir $BuildDir -R '^light_audio\.' 2>&1 | Select-Object -Last 1
 
         Write-Host "`n=== mutants (each SHOULD fail) ==="
@@ -63,7 +82,7 @@ try {
                         continue
                 }
                 Set-Content $src -Value $patched -NoNewline
-                $build = & cmake --build $BuildDir --target test_audio_convert 2>&1
+                $build = & cmake --build $BuildDir --target test_audio_convert test_audio_playback 2>&1
                 if ($LASTEXITCODE -ne 0) {
                         "{0,-28} -- did not compile (not a useful mutant)" -f $name
                 } else {
@@ -76,7 +95,7 @@ try {
         }
 } finally {
         Restore-Source
-        & cmake --build $BuildDir --target test_audio_convert 2>&1 | Out-Null
+        & cmake --build $BuildDir --target test_audio_convert test_audio_playback 2>&1 | Out-Null
 }
 
 # KNOWN SURVIVOR: 'no output clamp'. The input clamp already bounds `centred` to -128..127, so

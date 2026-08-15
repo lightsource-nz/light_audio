@@ -248,6 +248,17 @@ void light_audio_tone(struct audio_device *dev, uint32_t hz, uint32_t duration_m
 void light_audio_stop(struct audio_device *dev)
 {
         dev->driver_ctx->driver->stop(dev);
+        //   a tone is a running square wave, not a transfer, and stop() does not end one: it
+        // aborts the sample DMA and parks the duty at mid-scale, which for a tone is the same
+        // 50% duty it was already at, at the same frequency -- still audible. Only tone(0)
+        // releases the pin.
+        //
+        //   without this the flags say silent while the piezo sounds indefinitely, and since
+        // toning is now false the poll loop will never expire it either. Guarded rather than
+        // unconditional because tone(0) drives the pin low, while the sample path deliberately
+        // leaves it parked at mid-scale
+        if(dev->toning)
+                dev->driver_ctx->driver->tone(dev, 0);
         _release_buffer(dev);
         dev->playing = false;
         dev->toning = false;
