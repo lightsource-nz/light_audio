@@ -51,3 +51,43 @@ set(LIGHT_AUDIO_PLAYBACK_TEST_CASES
 foreach(_case ${LIGHT_AUDIO_PLAYBACK_TEST_CASES})
         add_test(NAME light_audio.${_case} COMMAND test_audio_playback ${_case})
 endforeach()
+
+#   the PWM driver, against a fake peripheral. A third binary rather than more cases in either of
+# the two above, because this one replaces part of the platform under the whole process: the
+# --wrap flags below apply to the entire link, so a test that wanted the REAL host PWM could not
+# share a binary with it.
+add_executable(test_audio_pwm ${CMAKE_CURRENT_LIST_DIR}/test_audio_pwm.c)
+target_link_libraries(test_audio_pwm PRIVATE light_audio)
+
+#   -Wl,--wrap redirects each call to __wrap_<symbol>, which the test defines. This is needed
+# rather than simply defining the functions again because light_core_arch_host_os contributes
+# light_platform_pwm.c to every target as an INTERFACE source -- a second definition would be a
+# duplicate symbol at link, not an override.
+#
+#   EVERY symbol audio_pwm.c calls has to be listed. A missing one links silently against the
+# host stub, which returns NULL from open() and does nothing else, so the test would exercise
+# the absent-hardware path while appearing to test the real one -- passing for the wrong reason.
+foreach(_sym
+        light_platform_pwm_open
+        light_platform_pwm_close
+        light_platform_pwm_configure
+        light_platform_pwm_set_frequency
+        light_platform_pwm_set_duty
+        light_platform_pwm_set_enabled
+        light_platform_pwm_release_pin
+        light_platform_pwm_get_group)
+        target_link_options(test_audio_pwm PRIVATE -Wl,--wrap=${_sym})
+endforeach()
+
+# KEEP IN SYNC with test_cases[] in test_audio_pwm.c
+set(LIGHT_AUDIO_PWM_TEST_CASES
+        open_parks_the_output_silent
+        tone_sets_frequency_and_half_duty
+        tone_zero_drives_the_pin_low
+        destroy_releases_low_then_closes
+        absent_pwm_is_tolerated
+        fallbacks_without_pwm_streaming
+)
+foreach(_case ${LIGHT_AUDIO_PWM_TEST_CASES})
+        add_test(NAME light_audio.${_case} COMMAND test_audio_pwm ${_case})
+endforeach()

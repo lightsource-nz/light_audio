@@ -19,7 +19,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$src = (Resolve-Path (Join-Path $PSScriptRoot '..\src\audio.c')).Path
+#   two sources now: the core (audio.c) and the PWM driver (audio_pwm.c). Each mutant names the
+# one it patches, and every file touched is backed up and restored, so a run that dies partway
+# cannot leave either of them mutated
+$sources = @{
+        'audio'     = (Resolve-Path (Join-Path $PSScriptRoot '..\src\audio.c')).Path
+        'audio_pwm' = (Resolve-Path (Join-Path $PSScriptRoot '..\src\audio_pwm.c')).Path
+}
 
 if (-not (Test-Path $BuildDir)) {
         Write-Error "no build directory at $BuildDir -- configure a HOST build first, or pass -BuildDir"
@@ -28,14 +34,14 @@ $BuildDir = (Resolve-Path $BuildDir).Path
 
 # single-line search strings only -- see the note in rend's copy of this script
 $mutants = @(
- @('attenuate towards zero',   'int32_t duty = centred + LIGHT_AUDIO_DUTY_SILENCE;', 'int32_t duty = (centred + LIGHT_AUDIO_DUTY_SILENCE) * (int32_t)volume / LIGHT_AUDIO_VOLUME_MAX;'),
- @('no re-centring',           'int32_t duty = centred + LIGHT_AUDIO_DUTY_SILENCE;', 'int32_t duty = centred;'),
- @('divide instead of shift',  'centred = sample >> 8;', 'centred = sample / 256;'),
- @('wrong U8 bias',            'centred = (sample & 0xFF) - 128;', 'centred = (sample & 0xFF) - 127;'),
- @('no input clamp',           'if(sample < -32768) sample = -32768;', 'if(0) sample = -32768;'),
- @('no output clamp',          'if(duty > LIGHT_AUDIO_DUTY_MAX) duty = LIGHT_AUDIO_DUTY_MAX;', 'if(0) duty = LIGHT_AUDIO_DUTY_MAX;'),
- @('volume not clamped',       'if(volume > LIGHT_AUDIO_VOLUME_MAX)', 'if(0)'),
- @('shift by 7 (double gain)', 'centred = sample >> 8;', 'centred = sample >> 7;'),
+ @('attenuate towards zero','audio',   'int32_t duty = centred + LIGHT_AUDIO_DUTY_SILENCE;', 'int32_t duty = (centred + LIGHT_AUDIO_DUTY_SILENCE) * (int32_t)volume / LIGHT_AUDIO_VOLUME_MAX;'),
+ @('no re-centring','audio',           'int32_t duty = centred + LIGHT_AUDIO_DUTY_SILENCE;', 'int32_t duty = centred;'),
+ @('divide instead of shift','audio',  'centred = sample >> 8;', 'centred = sample / 256;'),
+ @('wrong U8 bias','audio',            'centred = (sample & 0xFF) - 128;', 'centred = (sample & 0xFF) - 127;'),
+ @('no input clamp','audio',           'if(sample < -32768) sample = -32768;', 'if(0) sample = -32768;'),
+ @('no output clamp','audio',          'if(duty > LIGHT_AUDIO_DUTY_MAX) duty = LIGHT_AUDIO_DUTY_MAX;', 'if(0) duty = LIGHT_AUDIO_DUTY_MAX;'),
+ @('volume not clamped','audio',       'if(volume > LIGHT_AUDIO_VOLUME_MAX)', 'if(0)'),
+ @('shift by 7 (double gain)','audio', 'centred = sample >> 8;', 'centred = sample >> 7;'),
  #   the playback lifecycle, covered by test_audio_playback.c. These break sequencing rather
  # than arithmetic, so the symptom is not a wrong sound but a use-after-free, a leak, or a
  # transducer left sounding -- none of which a listening test would reliably catch, and the
@@ -44,58 +50,89 @@ $mutants = @(
  # `_release_buffer(dev);` picks out the one on the refused-submit path while leaving the
  # three at other depths alone. Where an anchor genuinely appears twice at the same depth the
  # mutant is named for what patching BOTH does
- @('buffer freed while DMA reads it', '                if(dev->playing && !dev->driver_ctx->driver->busy(dev)) {', '                if(dev->playing) {'),
- @('conversion buffer never freed',  '        if(!dev->owned_buffer)', '        if(1)'),
- @('refused submit leaks its buffer', '                _release_buffer(dev);', '                ;'),
- @('zero-copy taken at any volume',  '        return format->encoding == LIGHT_AUDIO_PCM_U8 && volume == LIGHT_AUDIO_VOLUME_MAX;', '        return format->encoding == LIGHT_AUDIO_PCM_U8;'),
- @('busy device is interrupted',     '        if(dev->driver_ctx->driver->busy(dev))', '        if(0)'),
- @('stereo accepted',                '        if(format.channels > 1) {', '        if(0) {'),
- @('unknown encoding accepted',      '        if(format.encoding != LIGHT_AUDIO_PCM_U8 && format.encoding != LIGHT_AUDIO_PCM_S16) {', '        if(0) {'),
- @('the driver is never stopped',    '        dev->driver_ctx->driver->stop(dev);', '        ;'),
- @('stop does not silence a tone',   '                dev->driver_ctx->driver->tone(dev, 0);' + "`r`n" + '        _release_buffer(dev);', '        _release_buffer(dev);'),
- @('indefinite tone expires immediately', '                if(dev->toning && dev->tone_end_ms', '                if(dev->toning && (1 || dev->tone_end_ms)'),
- @('tone duration never expires',    '                                && (int32_t)(now - dev->tone_end_ms) >= 0) {', '                                && 0) {')
+ @('buffer freed while DMA reads it','audio', '                if(dev->playing && !dev->driver_ctx->driver->busy(dev)) {', '                if(dev->playing) {'),
+ @('conversion buffer never freed','audio',  '        if(!dev->owned_buffer)', '        if(1)'),
+ @('refused submit leaks its buffer','audio', '                _release_buffer(dev);', '                ;'),
+ @('zero-copy taken at any volume','audio',  '        return format->encoding == LIGHT_AUDIO_PCM_U8 && volume == LIGHT_AUDIO_VOLUME_MAX;', '        return format->encoding == LIGHT_AUDIO_PCM_U8;'),
+ @('busy device is interrupted','audio',     '        if(dev->driver_ctx->driver->busy(dev))', '        if(0)'),
+ @('stereo accepted','audio',                '        if(format.channels > 1) {', '        if(0) {'),
+ @('unknown encoding accepted','audio',      '        if(format.encoding != LIGHT_AUDIO_PCM_U8 && format.encoding != LIGHT_AUDIO_PCM_S16) {', '        if(0) {'),
+ @('the driver is never stopped','audio',    '        dev->driver_ctx->driver->stop(dev);', '        ;'),
+ @('stop does not silence a tone','audio',   '                dev->driver_ctx->driver->tone(dev, 0);' + "`r`n" + '        _release_buffer(dev);', '        _release_buffer(dev);'),
+ @('indefinite tone expires immediately','audio', '                if(dev->toning && dev->tone_end_ms', '                if(dev->toning && (1 || dev->tone_end_ms)'),
+ @('tone duration never expires','audio',    '                                && (int32_t)(now - dev->tone_end_ms) >= 0) {', '                                && 0) {'),
+ #   the PWM driver, covered by test_audio_pwm.c against a --wrap'd fake peripheral. Every one of
+ # these compiles cleanly, passes review, and is AUDIBLE: a click on the first sample, a hiss
+ # from a floating pin, or a piezo left holding whatever level it stopped on
+ @('output not parked silent on open','audio_pwm',
+   '                light_platform_pwm_set_duty(state->pwm, LIGHT_AUDIO_DUTY_SILENCE);', '                ;'),
+ @('open configures the wrong wrap','audio_pwm',
+   '                light_platform_pwm_configure(state->pwm, LIGHT_AUDIO_DUTY_MAX, 1);',
+   '                light_platform_pwm_configure(state->pwm, AUDIO_PWM_TONE_WRAP, 1);'),
+ @('tone at full duty instead of half','audio_pwm',
+   '        light_platform_pwm_set_duty(state->pwm, AUDIO_PWM_TONE_WRAP / 2);',
+   '        light_platform_pwm_set_duty(state->pwm, AUDIO_PWM_TONE_WRAP);'),
+ @('0 Hz leaves the pin floating','audio_pwm',
+   '                light_platform_pwm_release_pin(state->pwm, false);' + "`r`n" + '                return;',
+   '                return;'),
+ @('0 Hz releases the pin HIGH','audio_pwm',
+   '                light_platform_pwm_release_pin(state->pwm, false);' + "`r`n" + '                return;',
+   '                light_platform_pwm_release_pin(state->pwm, true);' + "`r`n" + '                return;'),
+ @('teardown closes without releasing','audio_pwm',
+   '                light_platform_pwm_release_pin(state->pwm, false);' + "`r`n" + '                light_platform_pwm_close(state->pwm);',
+   '                light_platform_pwm_close(state->pwm);'),
+ @('teardown leaks the PWM block','audio_pwm',
+   '                light_platform_pwm_close(state->pwm);', '                ;'),
+ @('missing PWM is not tolerated','audio_pwm', '        if(!state->pwm)', '        if(0)')
 )
 
-$original = Get-Content $src -Raw
+$targets = @('test_audio_convert', 'test_audio_playback', 'test_audio_pwm')
+
+# every source is captured up front, so a restore never depends on which one a run died on
+$originals = @{}
+foreach ($k in $sources.Keys) { $originals[$k] = Get-Content $sources[$k] -Raw }
 $restored = $false
-function Restore-Source {
+function Restore-Sources {
         if (-not $script:restored) {
-                Set-Content $script:src -Value $script:original -NoNewline
+                foreach ($k in $script:sources.Keys) {
+                        Set-Content $script:sources[$k] -Value $script:originals[$k] -NoNewline
+                }
                 $script:restored = $true
-                Write-Host "source restored"
+                Write-Host "sources restored"
         }
 }
-trap { Restore-Source; break }
+trap { Restore-Sources; break }
 
 try {
         Write-Host "=== baseline (unmutated) ==="
-        & cmake --build $BuildDir --target test_audio_convert test_audio_playback 2>&1 | Out-Null
+        & cmake --build $BuildDir --target @targets 2>&1 | Out-Null
         & ctest --test-dir $BuildDir -R '^light_audio\.' 2>&1 | Select-Object -Last 1
 
         Write-Host "`n=== mutants (each SHOULD fail) ==="
         foreach ($m in $mutants) {
-                $name, $find, $replace = $m
+                $name, $which, $find, $replace = $m
+                $src = $sources[$which]
+                $original = $originals[$which]
                 $patched = $original.Replace($find, $replace)
                 if ($patched -eq $original) {
-                        "{0,-28} !! search string not found -- has audio.c moved on?" -f $name
+                        "{0,-40} !! anchor not found -- has {1}.c moved on?" -f $name, $which
                         continue
                 }
                 Set-Content $src -Value $patched -NoNewline
-                $build = & cmake --build $BuildDir --target test_audio_convert test_audio_playback 2>&1
+                & cmake --build $BuildDir --target @targets 2>&1 | Out-Null
                 if ($LASTEXITCODE -ne 0) {
-                        "{0,-28} -- did not compile (not a useful mutant)" -f $name
+                        "{0,-40} -> killed (build)" -f $name
                 } else {
                         $out = & ctest --test-dir $BuildDir -R '^light_audio\.' 2>&1
                         $line = ($out | Select-String 'tests passed' | Select-Object -First 1)
                         $verdict = if ($LASTEXITCODE -ne 0) { 'caught' } else { '*** SURVIVED ***' }
-                        "{0,-28} -> {1}  ({2})" -f $name, $verdict, ($line -replace '\s+', ' ').Trim()
+                        "{0,-40} -> {1}  ({2})" -f $name, $verdict, ($line -replace '\s+', ' ').Trim()
                 }
                 Set-Content $src -Value $original -NoNewline
         }
 } finally {
-        Restore-Source
-        & cmake --build $BuildDir --target test_audio_convert test_audio_playback 2>&1 | Out-Null
+        Restore-Sources
+        & cmake --build $BuildDir --target @targets 2>&1 | Out-Null
 }
 
 # KNOWN SURVIVOR: 'no output clamp'. The input clamp already bounds `centred` to -128..127, so
