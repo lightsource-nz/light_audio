@@ -32,7 +32,7 @@ if (-not (Test-Path $BuildDir)) {
 }
 $BuildDir = (Resolve-Path $BuildDir).Path
 
-# single-line search strings only -- see the note in rend's copy of this script
+# single-line search strings only -- see the note in light_draw's copy of this script
 $mutants = @(
  @('attenuate towards zero','audio',   'int32_t duty = centred + LIGHT_AUDIO_DUTY_SILENCE;', 'int32_t duty = (centred + LIGHT_AUDIO_DUTY_SILENCE) * (int32_t)volume / LIGHT_AUDIO_VOLUME_MAX;'),
  @('no re-centring','audio',           'int32_t duty = centred + LIGHT_AUDIO_DUTY_SILENCE;', 'int32_t duty = centred;'),
